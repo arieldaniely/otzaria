@@ -17,6 +17,7 @@ import 'package:otzaria/settings/engine/settings_state.dart';
 import 'package:otzaria/text_book/bloc/text_book_bloc.dart';
 import 'package:otzaria/text_book/bloc/text_book_event.dart';
 import 'package:otzaria/text_book/bloc/text_book_state.dart';
+import 'package:otzaria/text_book/utils/tanach_verse_markers.dart';
 import 'package:otzaria/text_book/view/page_shape/simple_text_viewer.dart';
 import 'package:otzaria/widgets/misc/app_context_menu.dart';
 import 'package:otzaria/text_book/view/selection/selection_persistence.dart';
@@ -343,8 +344,7 @@ void main() {
     menuItemFocusNode.dispose();
   });
 
-  testWidgets(
-      'אחרי סגירת תת-תפריט הפוקוס חוזר לטקסט הראשי בצורת הדף',
+  testWidgets('אחרי סגירת תת-תפריט הפוקוס חוזר לטקסט הראשי בצורת הדף',
       (tester) async {
     final textBookBloc = _TestTextBookBloc(_loadedState());
     final personalNotesBloc = _TestPersonalNotesBloc(
@@ -503,8 +503,7 @@ void main() {
     );
   });
 
-  testWidgets(
-      'אחרי סגירת תפריט, פוקוס שהמשתמש העביר לכפתור אחר אינו נגנב',
+  testWidgets('אחרי סגירת תפריט, פוקוס שהמשתמש העביר לכפתור אחר אינו נגנב',
       (tester) async {
     final textBookBloc = _TestTextBookBloc(_loadedState());
     final personalNotesBloc = _TestPersonalNotesBloc(
@@ -659,6 +658,50 @@ void main() {
     expect(enlargedNote.style?.fontStyle, FontStyle.italic);
   });
 
+  test('מחלץ מספר פסוק תנ"כי מתחילת השורה בלי הסוגריים', () {
+    final result = extractLeadingTanachVerseMarker(
+      '<small>(טו)</small> בראשית ברא',
+    );
+
+    expect(result.verseNumber, 'טו');
+    expect(result.text, 'בראשית ברא');
+  });
+
+  testWidgets('מצב טקסט רציף מציג מספר פסוק בצד ולא כחלק מהטקסט',
+      (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 500,
+            child: ContinuousReadingParagraph(
+              lines: [
+                ContinuousReadingParagraphLine(
+                  lineIndex: 0,
+                  text: 'בראשית ברא',
+                  verseNumber: 'א',
+                  style: TextStyle(fontSize: 20),
+                ),
+              ],
+              baseStyle: TextStyle(fontSize: 20),
+              onLineTap: _noopLineTap,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('א'), findsOneWidget);
+    final richText = tester.widget<RichText>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is RichText &&
+            widget.text.toPlainText().contains('בראשית ברא'),
+      ),
+    );
+    expect(richText.text.toPlainText(), 'בראשית ברא');
+  });
+
   testWidgets('מצב טקסט רציף לא מיישר מקטע קצר לשני הצדדים', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
@@ -712,6 +755,227 @@ void main() {
     final richText = tester.widget<RichText>(find.byType(RichText));
 
     expect(richText.textAlign, TextAlign.justify);
+  });
+  testWidgets('לחיצה על מספר פסוק במצב רציף מסמנת את הפסוק', (tester) async {
+    int? tappedLineIndex;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 500,
+            child: ContinuousReadingParagraph(
+              lines: const [
+                ContinuousReadingParagraphLine(
+                  lineIndex: 7,
+                  text: 'בראשית ברא',
+                  verseNumber: 'א',
+                  style: TextStyle(fontSize: 20),
+                ),
+              ],
+              baseStyle: const TextStyle(fontSize: 20),
+              onLineTap: (lineIndex) => tappedLineIndex = lineIndex,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      (tester.getCenter(find.text('א')).dy -
+              tester
+                  .getCenter(
+                    find.byWidgetPredicate(
+                      (widget) =>
+                          widget is RichText &&
+                          widget.text.toPlainText().trim().length > 1,
+                    ),
+                  )
+                  .dy)
+          .abs(),
+      lessThan(6),
+    );
+
+    await tester.tap(find.text('א'));
+
+    expect(tappedLineIndex, 7);
+  });
+
+  testWidgets('continuous verse markers follow visual wrapped lines',
+      (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 170,
+            child: ContinuousReadingParagraph(
+              lines: [
+                ContinuousReadingParagraphLine(
+                  lineIndex: 0,
+                  text: 'one two three four five six seven',
+                  verseNumber: 'א',
+                  style: TextStyle(fontSize: 20),
+                ),
+                ContinuousReadingParagraphLine(
+                  lineIndex: 1,
+                  text: 'eight nine',
+                  verseNumber: 'ב',
+                  style: TextStyle(fontSize: 20),
+                ),
+              ],
+              baseStyle: TextStyle(fontSize: 20),
+              onLineTap: _noopLineTap,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      tester.getTopLeft(find.text('ב')).dy,
+      greaterThan(tester.getTopLeft(find.text('א')).dy),
+    );
+  });
+  testWidgets('continuous verse markers spread horizontally when crowded',
+      (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 900,
+            child: ContinuousReadingParagraph(
+              lines: [
+                ContinuousReadingParagraphLine(
+                  lineIndex: 0,
+                  text: 'one',
+                  verseNumber: 'א',
+                  style: TextStyle(fontSize: 20),
+                ),
+                ContinuousReadingParagraphLine(
+                  lineIndex: 1,
+                  text: 'two',
+                  verseNumber: 'ב',
+                  style: TextStyle(fontSize: 20),
+                ),
+                ContinuousReadingParagraphLine(
+                  lineIndex: 2,
+                  text: 'three',
+                  verseNumber: 'ג',
+                  style: TextStyle(fontSize: 20),
+                ),
+                ContinuousReadingParagraphLine(
+                  lineIndex: 3,
+                  text: 'four',
+                  verseNumber: 'ד',
+                  style: TextStyle(fontSize: 20),
+                ),
+                ContinuousReadingParagraphLine(
+                  lineIndex: 4,
+                  text: 'five',
+                  verseNumber: 'ה',
+                  style: TextStyle(fontSize: 20),
+                ),
+              ],
+              baseStyle: TextStyle(fontSize: 20),
+              onLineTap: _noopLineTap,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final firstRowTop = tester.getTopLeft(find.text('א')).dy;
+    final secondRowTop = tester.getTopLeft(find.text('ד')).dy;
+
+    expect(tester.getTopLeft(find.text('ב')).dy, firstRowTop);
+    expect(tester.getTopLeft(find.text('ג')).dy, firstRowTop);
+    expect(tester.getTopLeft(find.text('ה')).dy, secondRowTop);
+    expect(secondRowTop, greaterThan(firstRowTop));
+    expect(
+      tester.getTopLeft(find.text('ג')).dx,
+      lessThan(tester.getTopLeft(find.text('א')).dx),
+    );
+  });
+
+  testWidgets(
+      'continuous verse markers keep long two-letter numbers on one line',
+      (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 900,
+            child: ContinuousReadingParagraph(
+              lines: [
+                ContinuousReadingParagraphLine(
+                  lineIndex: 0,
+                  text: 'one',
+                  verseNumber: 'כא',
+                  style: TextStyle(fontSize: 20),
+                ),
+                ContinuousReadingParagraphLine(
+                  lineIndex: 1,
+                  text: 'two',
+                  verseNumber: 'כב',
+                  style: TextStyle(fontSize: 20),
+                ),
+              ],
+              baseStyle: TextStyle(fontSize: 20),
+              onLineTap: _noopLineTap,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final markerText = tester.widget<Text>(find.text('כא'));
+
+    expect(markerText.maxLines, isNull);
+    expect(tester.getSize(find.text('כא')).width, greaterThan(16));
+    expect(tester.getSize(find.text('כא')).height,
+        lessThan(tester.getSize(find.text('כא')).width * 2));
+  });
+
+  testWidgets('continuous verse marker at visual line start stays on that line',
+      (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 170,
+            child: ContinuousReadingParagraph(
+              lines: [
+                ContinuousReadingParagraphLine(
+                  lineIndex: 0,
+                  text: 'one two three four five six seven',
+                  verseNumber: 'א',
+                  style: TextStyle(fontSize: 20),
+                ),
+                ContinuousReadingParagraphLine(
+                  lineIndex: 1,
+                  text: 'eight nine ten',
+                  verseNumber: 'ב',
+                  style: TextStyle(fontSize: 20),
+                ),
+                ContinuousReadingParagraphLine(
+                  lineIndex: 2,
+                  text: 'eleven',
+                  verseNumber: 'ג',
+                  style: TextStyle(fontSize: 20),
+                ),
+              ],
+              baseStyle: TextStyle(fontSize: 20),
+              onLineTap: _noopLineTap,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      tester.getTopLeft(find.text('ג')).dy,
+      greaterThan(tester.getTopLeft(find.text('ב')).dy),
+    );
   });
 }
 

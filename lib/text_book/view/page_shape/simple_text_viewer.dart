@@ -40,6 +40,7 @@ import 'package:otzaria/plugins/services/plugin_runtime_dispatcher.dart';
 import 'package:otzaria/plugins/utils/fluent_icon_resolver.dart';
 import 'package:otzaria/text_book/utils/reading_segment_navigation.dart';
 import 'package:otzaria/text_book/utils/reading_segments.dart';
+import 'package:otzaria/text_book/utils/tanach_verse_markers.dart';
 import 'package:otzaria/text_book/view/widgets/continuous_reading_paragraph.dart';
 import 'package:otzaria/text_book/view/selection/selection_sync_controller.dart';
 
@@ -1566,6 +1567,13 @@ class _SimpleTextViewerState extends State<SimpleTextViewer> {
               final data = segment.isVirtualHeader
                   ? segment.text
                   : widget.content[primaryLineIndex];
+              final verseMarkerResult =
+                  state.isTanach && !segment.isVirtualHeader
+                      ? extractLeadingTanachVerseMarker(data)
+                      : TanachVerseMarkerResult(
+                          verseNumber: null,
+                          text: data,
+                        );
               final targetTitle =
                   widget.isMainText ? state.book.title : widget.bookTitle;
               // אם המשתמש לחץ על כפתור ניקוד (override), נשתמש בערך מה-state
@@ -1625,7 +1633,7 @@ class _SimpleTextViewerState extends State<SimpleTextViewer> {
                 initialData: state.removeNikud,
                 builder: (context, snapshot) {
                   return SmartTextWidget(
-                    text: data,
+                    text: verseMarkerResult.text,
                     widgetKey: ValueKey('html_simple_text_$primaryLineIndex'),
                     settings: RenderSettings(
                       removeNikud: snapshot.data ?? state.removeNikud,
@@ -1661,13 +1669,20 @@ class _SimpleTextViewerState extends State<SimpleTextViewer> {
               );
 
               if (!widget.isMainText || notesForLine.isEmpty) {
-                return textWidget;
+                return _withTanachVerseMarker(
+                  verseNumber: verseMarkerResult.verseNumber,
+                  fontFamily: widget.fontFamily ?? settingsState.fontFamily,
+                  lineHeight: settingsState.lineHeight,
+                  child: textWidget,
+                );
               }
 
               final note = notesForLine.first;
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+              return _withTanachVerseMarker(
+                verseNumber: verseMarkerResult.verseNumber,
+                fontFamily: widget.fontFamily ?? settingsState.fontFamily,
+                lineHeight: settingsState.lineHeight,
+                leadingChildren: [
                   Tooltip(
                     message: note.contentPlain,
                     child: GestureDetector(
@@ -1704,8 +1719,8 @@ class _SimpleTextViewerState extends State<SimpleTextViewer> {
                       ),
                     ),
                   ),
-                  Expanded(child: textWidget),
                 ],
+                child: textWidget,
               );
             },
           ),
@@ -1777,8 +1792,14 @@ class _SimpleTextViewerState extends State<SimpleTextViewer> {
       final style = backgroundColor == null
           ? baseTextStyle
           : baseTextStyle.copyWith(backgroundColor: backgroundColor);
+      final verseMarkerResult = state.isTanach
+          ? extractLeadingTanachVerseMarker(widget.content[lineIndex])
+          : TanachVerseMarkerResult(
+              verseNumber: null,
+              text: widget.content[lineIndex],
+            );
       final htmlText = _continuousLineHtml(
-        widget.content[lineIndex],
+        verseMarkerResult.text,
         state: state,
         settingsState: settingsState,
       );
@@ -1787,6 +1808,7 @@ class _SimpleTextViewerState extends State<SimpleTextViewer> {
         ContinuousReadingParagraphLine(
           lineIndex: lineIndex,
           text: utils.stripHtmlIfNeeded(htmlText).trim(),
+          verseNumber: verseMarkerResult.verseNumber,
           inlineSpans: buildInlineHtmlSpans(htmlText, style),
           style: style,
         ),
@@ -1814,6 +1836,56 @@ class _SimpleTextViewerState extends State<SimpleTextViewer> {
         fontSize: widget.fontSize,
         fontFamily: widget.fontFamily ?? settingsState.fontFamily,
         lineHeight: settingsState.lineHeight,
+      ),
+    );
+  }
+
+  /// מציג מספר פסוק תנ"כי מחוץ לטקסט השורה.
+  Widget _withTanachVerseMarker({
+    required String? verseNumber,
+    required String? fontFamily,
+    required double lineHeight,
+    required Widget child,
+    List<Widget> leadingChildren = const [],
+  }) {
+    final marker = verseNumber?.trim();
+    if ((marker == null || marker.isEmpty) && leadingChildren.isEmpty) {
+      return child;
+    }
+
+    final colorScheme = Theme.of(context).colorScheme;
+    final hasMarker = marker != null && marker.isNotEmpty;
+    final markerFontSize = widget.fontSize * 0.68;
+    final markerTopPadding =
+        ((widget.fontSize * lineHeight) - markerFontSize) / 2;
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (hasMarker) ...[
+            SizedBox(
+              width: 28,
+              child: Padding(
+                padding: EdgeInsets.only(top: markerTopPadding),
+                child: Text(
+                  marker,
+                  textDirection: TextDirection.rtl,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    fontSize: markerFontSize,
+                    fontFamily: fontFamily,
+                    color: colorScheme.onSurfaceVariant,
+                    height: 1.0,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          ...leadingChildren,
+          Expanded(child: child),
+        ],
       ),
     );
   }

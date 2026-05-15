@@ -46,6 +46,7 @@ import 'package:otzaria/plugins/services/plugin_runtime_dispatcher.dart';
 import 'package:otzaria/plugins/utils/fluent_icon_resolver.dart';
 import 'package:otzaria/text_book/utils/reading_segment_navigation.dart';
 import 'package:otzaria/text_book/utils/reading_segments.dart';
+import 'package:otzaria/text_book/utils/tanach_verse_markers.dart';
 import 'package:otzaria/text_book/view/widgets/continuous_reading_paragraph.dart';
 
 class CombinedView extends StatefulWidget {
@@ -310,6 +311,7 @@ class _CombinedViewState extends State<CombinedView> {
 
     setState(mutation);
   }
+
   // עדכון האינדקס הנוכחי ב-tab
   void _updateTabIndex() {
     final positions = widget.tab.positionsListener.itemPositions.value;
@@ -1501,6 +1503,13 @@ class _CombinedViewState extends State<CombinedView> {
                             dataWithLinks = data;
                           }
                         }
+                        final verseMarkerResult =
+                            state.isTanach && !segment.isVirtualHeader
+                                ? extractLeadingTanachVerseMarker(dataWithLinks)
+                                : TanachVerseMarkerResult(
+                                    verseNumber: null,
+                                    text: dataWithLinks,
+                                  );
 
                         // הדגשה ממוקדת מקישור עומק: רק על הסעיף שצוין, ובלי
                         // להפעיל את שאר אפשרויות החיפוש (כתיב מלא/חסר וכו').
@@ -1528,7 +1537,7 @@ class _CombinedViewState extends State<CombinedView> {
                             hasPinpoint ? 0 : state.searchDistance;
 
                         final textWidget = SmartTextWidget(
-                          text: dataWithLinks,
+                          text: verseMarkerResult.text,
                           widgetKey: ValueKey(
                               'html_${widget.tab.book.title}_$primaryLineIndex'),
                           settings: RenderSettings(
@@ -1567,12 +1576,11 @@ class _CombinedViewState extends State<CombinedView> {
                             : textWidget;
 
                         if (notesForLine.isEmpty) {
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(width: 16),
-                              Expanded(child: constrainedText),
-                            ],
+                          return _withTanachVerseMarker(
+                            verseNumber: verseMarkerResult.verseNumber,
+                            fontFamily: settingsState.fontFamily,
+                            lineHeight: settingsState.lineHeight,
+                            child: constrainedText,
                           );
                         }
 
@@ -1621,12 +1629,14 @@ class _CombinedViewState extends State<CombinedView> {
                           ),
                         );
 
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
+                        return _withTanachVerseMarker(
+                          verseNumber: verseMarkerResult.verseNumber,
+                          fontFamily: settingsState.fontFamily,
+                          lineHeight: settingsState.lineHeight,
+                          leadingChildren: [
                             indicator,
-                            Expanded(child: constrainedText),
                           ],
+                          child: constrainedText,
                         );
                       },
                     );
@@ -1725,8 +1735,14 @@ class _CombinedViewState extends State<CombinedView> {
       final style = backgroundColor == null
           ? baseTextStyle
           : baseTextStyle.copyWith(backgroundColor: backgroundColor);
+      final verseMarkerResult = state.isTanach
+          ? extractLeadingTanachVerseMarker(widget.data[lineIndex])
+          : TanachVerseMarkerResult(
+              verseNumber: null,
+              text: widget.data[lineIndex],
+            );
       final htmlText = _continuousLineHtml(
-        widget.data[lineIndex],
+        verseMarkerResult.text,
         state: state,
         settingsState: settingsState,
       );
@@ -1735,6 +1751,7 @@ class _CombinedViewState extends State<CombinedView> {
         ContinuousReadingParagraphLine(
           lineIndex: lineIndex,
           text: utils.stripHtmlIfNeeded(htmlText).trim(),
+          verseNumber: verseMarkerResult.verseNumber,
           inlineSpans: buildInlineHtmlSpans(htmlText, style),
           style: style,
         ),
@@ -1762,6 +1779,55 @@ class _CombinedViewState extends State<CombinedView> {
         fontSize: widget.textSize,
         fontFamily: settingsState.fontFamily,
         lineHeight: settingsState.lineHeight,
+      ),
+    );
+  }
+
+  Widget _withTanachVerseMarker({
+    required String? verseNumber,
+    required String? fontFamily,
+    required double lineHeight,
+    required Widget child,
+    List<Widget> leadingChildren = const [],
+  }) {
+    final marker = verseNumber?.trim();
+    if ((marker == null || marker.isEmpty) && leadingChildren.isEmpty) {
+      return child;
+    }
+
+    final colorScheme = Theme.of(context).colorScheme;
+    final hasMarker = marker != null && marker.isNotEmpty;
+    final markerFontSize = widget.textSize * 0.68;
+    final markerTopPadding =
+        ((widget.textSize * lineHeight) - markerFontSize) / 2;
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (hasMarker) ...[
+            SizedBox(
+              width: 28,
+              child: Padding(
+                padding: EdgeInsets.only(top: markerTopPadding),
+                child: Text(
+                  marker,
+                  textDirection: TextDirection.rtl,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    fontSize: markerFontSize,
+                    fontFamily: fontFamily,
+                    color: colorScheme.onSurfaceVariant,
+                    height: 1.0,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          ...leadingChildren,
+          Expanded(child: child),
+        ],
       ),
     );
   }
