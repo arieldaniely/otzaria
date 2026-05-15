@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:otzaria/core/focus_repository.dart';
@@ -198,6 +199,7 @@ class ToolsScreenState extends State<ToolsScreen>
   bool _showMobileMenu = true;
   InstalledPlugin? _transientPlugin;
   bool _didInitFromBloc = false;
+  int _activeToolIdNotifierRevision = 0;
   // מונע rebuild מרובה של הטאבים כאשר הזהות המלאה של הלשוניות לא השתנתה
   String _lastDescriptorsSignature = '';
 
@@ -377,6 +379,26 @@ class ToolsScreenState extends State<ToolsScreen>
 
   void _setSelectedToolId(String? id) {
     _selectedToolId = id;
+    _publishActiveToolId(id);
+  }
+
+  void _publishActiveToolId(String? id) {
+    if (activeToolIdNotifier.value == id) return;
+
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks) {
+      final revision = ++_activeToolIdNotifierRevision;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (revision != _activeToolIdNotifierRevision) return;
+        if (activeToolIdNotifier.value != id) {
+          activeToolIdNotifier.value = id;
+        }
+      });
+      return;
+    }
+
+    _activeToolIdNotifierRevision++;
     activeToolIdNotifier.value = id;
   }
 
@@ -623,7 +645,7 @@ class ToolsScreenState extends State<ToolsScreen>
     _contentFocusNode.dispose();
     _contentScrollController.dispose();
     _tabScrollController.dispose();
-    activeToolIdNotifier.value = null;
+    _publishActiveToolId(null);
     super.dispose();
   }
 

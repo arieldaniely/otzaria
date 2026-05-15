@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:otzaria/text_book/utils/visible_index.dart';
 
 import 'package:flutter/services.dart';
@@ -149,7 +150,7 @@ class _CombinedViewState extends State<CombinedView> {
     if (!_selectionManager.isInSelectionMode && mounted) {
       // כשיוצאים ממצב בחירה, קוראים ל-setState כדי לכפות בנייה מחדש
       // של SelectionArea ולנקות את הבחירה באופן ויזואלי.
-      setState(() {});
+      _mutateSelectionState(() {});
     }
   }
 
@@ -285,7 +286,7 @@ class _CombinedViewState extends State<CombinedView> {
     }
 
     _selectionManager.exitSelectionMode();
-    setState(() {
+    _mutateSelectionState(() {
       _selectionAreaRevision = controller.revision;
       _savedSelectedText.value = null;
       _savedSelectedIndex.value = null;
@@ -294,6 +295,21 @@ class _CombinedViewState extends State<CombinedView> {
     widget.onSelectedTextChanged?.call(null);
   }
 
+  void _mutateSelectionState(VoidCallback mutation) {
+    if (!mounted) return;
+
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(mutation);
+      });
+      return;
+    }
+
+    setState(mutation);
+  }
   // עדכון האינדקס הנוכחי ב-tab
   void _updateTabIndex() {
     final positions = widget.tab.positionsListener.itemPositions.value;
@@ -1048,7 +1064,9 @@ class _CombinedViewState extends State<CombinedView> {
                 if (!shouldPersistSelectedText(plain)) {
                   widget.selectionSyncController?.clear(_selectionOwner);
                   _selectionManager.exitSelectionMode();
-                  _savedSelectedText.value = null;
+                  _mutateSelectionState(() {
+                    _savedSelectedText.value = null;
+                  });
                   return;
                 }
                 widget.selectionSyncController?.activate(_selectionOwner);
@@ -1061,7 +1079,9 @@ class _CombinedViewState extends State<CombinedView> {
 
                 // חשוב: כדי ש-Ctrl+C יעבוד מיד אחרי סימון טקסט עם העכבר
                 // נוודא שהפוקוס נמצא על אזור הקריאה.
-                _focusNode.requestFocus();
+                _mutateSelectionState(() {
+                  _focusNode.requestFocus();
+                });
 
                 // מחשב את מספר השורה המדויק של הטקסט המודגש
                 // משתמש באותה לוגיקה כמו בדיווח שגיאות
@@ -1102,26 +1122,26 @@ class _CombinedViewState extends State<CombinedView> {
                   foundIndex ??= loadedState.selectedIndex;
                 }
 
-                if (mounted) {
+                _mutateSelectionState(() {
                   _savedSelectedText.value = fixedPlain;
                   _savedSelectedIndex.value = foundIndex;
                   _currentSelectedIndex.value = foundIndex;
                   widget.onSelectedTextChanged?.call(fixedPlain);
+                });
 
-                  // שליחת event לפלאגינים עם ה-index המדויק
-                  final selectionText = fixedPlain?.trim() ?? '';
-                  if (selectionText.isNotEmpty && loadedState != null) {
-                    unawaited(PluginRuntimeDispatcher.instance.dispatchEvent(
-                      'reader.selection_changed',
-                      {
-                        'text': selectionText,
-                        'currentRef': loadedState.currentTitle ?? '',
-                        'currentBook': loadedState.book.title,
-                        'currentBookId': loadedState.book.title,
-                        'currentIndex': foundIndex ?? 0,
-                      },
-                    ));
-                  }
+                // Dispatch the selection event after calculating the source index.
+                final selectionText = fixedPlain?.trim() ?? '';
+                if (selectionText.isNotEmpty && loadedState != null) {
+                  unawaited(PluginRuntimeDispatcher.instance.dispatchEvent(
+                    'reader.selection_changed',
+                    {
+                      'text': selectionText,
+                      'currentRef': loadedState.currentTitle ?? '',
+                      'currentBook': loadedState.book.title,
+                      'currentBookId': loadedState.book.title,
+                      'currentIndex': foundIndex ?? 0,
+                    },
+                  ));
                 }
                 _prefetchDictionaryLookups(fixedPlain);
               },

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:otzaria/text_book/utils/visible_index.dart';
 import 'package:flutter/services.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
@@ -250,11 +251,27 @@ class CommentaryListBaseState extends State<CommentaryListBase> {
       return;
     }
 
-    _savedSelectedText.value = null;
-    _lastSelectedLink.value = null;
-    setState(() {
+    _mutateSelectionState(() {
+      _savedSelectedText.value = null;
+      _lastSelectedLink.value = null;
       _selectionRevision = controller.revision;
     });
+  }
+
+  void _mutateSelectionState(VoidCallback mutation) {
+    if (!mounted) return;
+
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(mutation);
+      });
+      return;
+    }
+
+    setState(mutation);
   }
 
   Future<void> _scrollToSearchResult() async {
@@ -481,15 +498,19 @@ class CommentaryListBaseState extends State<CommentaryListBase> {
         });
       },
       onLinkSelected: (link, text) {
-        _savedSelectedText.value = text;
-        _lastSelectedLink.value = link;
-        if (!_searchFocusNode.hasFocus) {
-          _focusNode.requestFocus();
-        }
+        _mutateSelectionState(() {
+          _savedSelectedText.value = text;
+          _lastSelectedLink.value = link;
+          if (!_searchFocusNode.hasFocus) {
+            _focusNode.requestFocus();
+          }
+        });
       },
       onLinkSelectionCleared: () {
-        _savedSelectedText.value = null;
-        _lastSelectedLink.value = null;
+        _mutateSelectionState(() {
+          _savedSelectedText.value = null;
+          _lastSelectedLink.value = null;
+        });
       },
     );
   }
