@@ -93,12 +93,35 @@ class FileSystemLibraryProvider implements LibraryProvider {
           personalBooksDir, metadata, booksByCategory, ['ספרים אישיים'], map);
     }
 
+    await _loadCustomFolderBooks(metadata, booksByCategory, map);
+
     await _loadBundledTalmudBavliBooks(metadata, booksByCategory, map);
 
-    // NOTE: Custom folders are now fully managed via the database.
-    // They are scanned by FileSyncService and loaded by DatabaseLibraryProvider.
-
     return booksByCategory;
+  }
+
+  Future<void> _loadCustomFolderBooks(
+    Map<String, Map<String, dynamic>> metadata,
+    Map<String, List<Book>> booksByCategory,
+    Map<String, String> keyToPath,
+  ) async {
+    final customFoldersJson =
+        Settings.getValue<String>(SettingsRepository.keyCustomFolders);
+    final customFolders = CustomFoldersManager.loadFolders(customFoldersJson);
+
+    for (final folder
+        in customFolders.where((folder) => !folder.addToDatabase)) {
+      final dir = Directory(folder.path);
+      if (!await dir.exists()) continue;
+
+      await _loadBooksRecursively(
+        dir,
+        metadata,
+        booksByCategory,
+        _categoryPrefixForCustomFolder(folder),
+        keyToPath,
+      );
+    }
   }
 
   Future<void> _loadBundledTalmudBavliBooks(
@@ -383,9 +406,29 @@ class FileSystemLibraryProvider implements LibraryProvider {
       }
     }
 
-    // NOTE: Custom folders are now managed via the database.
+    final customFoldersJson =
+        Settings.getValue<String>(SettingsRepository.keyCustomFolders);
+    final customFolders = CustomFoldersManager.loadFolders(customFoldersJson);
+    for (final folder
+        in customFolders.where((folder) => !folder.addToDatabase)) {
+      if (!await Directory(folder.path).exists()) continue;
+      final customPaths = await _getAllBookPaths(folder.path);
+      for (final path in customPaths) {
+        addPath(path, folder.path, _categoryPrefixForCustomFolder(folder));
+      }
+    }
 
     return keyToPath;
+  }
+
+  List<String> _categoryPrefixForCustomFolder(CustomFolder folder) {
+    switch (folder.displayMode) {
+      case CustomFolderDisplayMode.personalCategory:
+        return ['ספרים אישיים', folder.name];
+      case CustomFolderDisplayMode.separate:
+      case CustomFolderDisplayMode.libraryRoot:
+        return [folder.name];
+    }
   }
 
   static Future<List<String>> _getAllBookPaths(String path) async {
@@ -602,6 +645,177 @@ class FileSystemLibraryProvider implements LibraryProvider {
     debugPrint(
         '📁 FileSystem catalog built with ${library.subCategories.length} top-level categories');
     return library;
+  }
+
+  Future<void> appendCustomFoldersToLibrary(
+    Library library,
+    Map<String, Map<String, dynamic>> metadata,
+  ) async {
+    if (!_isInitialized) await initialize();
+
+    final customFoldersJson =
+        Settings.getValue<String>(SettingsRepository.keyCustomFolders);
+    final customFolders = CustomFoldersManager.loadFolders(customFoldersJson);
+    final pathMap = await keyToPath;
+
+    for (final folder
+        in customFolders.where((folder) => !folder.addToDatabase)) {
+      final dir = Directory(folder.path);
+      if (!await dir.exists()) continue;
+
+      switch (folder.displayMode) {
+        case CustomFolderDisplayMode.personalCategory:
+          final personalCategory = _findOrCreateDirectSubCategory(
+            library,
+            'ספרים אישיים',
+            metadata,
+          );
+          final folderCategory = await _buildCategoryFromDirectory(
+            dir,
+            personalCategory,
+            ['ספרים אישיים', folder.name],
+            metadata,
+            pathMap,
+            titleOverride: folder.name,
+          );
+          _mergeCategoryIntoParent(
+            folderCategory,
+            personalCategory,
+            metadata,
+            mergeByTitle: true,
+          );
+        case CustomFolderDisplayMode.separate:
+          final folderCategory = await _buildCategoryFromDirectory(
+            dir,
+            library,
+            [folder.name],
+            metadata,
+            pathMap,
+            titleOverride: folder.name,
+          );
+          library.subCategories.add(folderCategory);
+        case CustomFolderDisplayMode.libraryRoot:
+          final folderCategory = await _buildCategoryFromDirectory(
+            dir,
+            library,
+            [folder.name],
+            metadata,
+            pathMap,
+            titleOverride: folder.name,
+          );
+          _mergeCategoryIntoParent(
+            folderCategory,
+            library,
+            metadata,
+            mergeByTitle: true,
+          );
+      }
+    }
+
+    _sortLibraryRecursive(library);
+  }
+
+  Future<Category> _buildCategoryFromDirectory(
+    Directory dir,
+    Category parent,
+    List<String> categoryPath,
+    Map<String, Map<String, dynamic>> metadata,
+    Map<String, String> keyToPath, {
+    String? titleOverride,
+  }) async {
+    final title = titleOverride ?? getTitleFromPath(dir.path);
+    final category = Category(
+      title: title,
+      description: metadata[title]?['heDesc'] ?? '',
+      shortDescription: metadata[title]?['heShortDesc'] ?? '',
+      order: metadata[title]?['order'] ?? 999,
+      subCategories: [],
+      books: [],
+      parent: parent,
+    );
+
+    await for (final entity in dir.list()) {
+      if (entity is Directory) {
+        final childTitle = getTitleFromPath(entity.path);
+        final childCategory = await _buildCategoryFromDirectory(
+          entity,
+          category,
+          [...categoryPath, childTitle],
+          metadata,
+          keyToPath,
+        );
+        category.subCategories.add(childCategory);
+      } else if (entity is File) {
+        final book = _createBookFromFile(entity, metadata, categoryPath);
+        if (book == null) continue;
+
+        final bookWithCategory =
+            _createBookWithCategory(book, category, metadata);
+        category.books.add(bookWithCategory);
+
+        if (bookWithCategory.categoryId != null) {
+          final key = _generateKey(
+            bookWithCategory.title,
+            bookWithCategory.categoryId!,
+            bookWithCategory.fileType ?? '',
+          );
+          keyToPath[key] = entity.path;
+        }
+      }
+    }
+
+    return category;
+  }
+
+  Category _findOrCreateDirectSubCategory(
+    Category parent,
+    String title,
+    Map<String, Map<String, dynamic>> metadata,
+  ) {
+    final existing =
+        parent.subCategories.where((c) => c.title == title).firstOrNull;
+    if (existing != null) return existing;
+
+    final created = Category(
+      title: title,
+      description: metadata[title]?['heDesc'] ?? '',
+      shortDescription: metadata[title]?['heShortDesc'] ?? '',
+      order: metadata[title]?['order'] ?? 999,
+      subCategories: [],
+      books: [],
+      parent: parent,
+    );
+    parent.subCategories.add(created);
+    return created;
+  }
+
+  void _mergeCategoryIntoParent(
+    Category source,
+    Category targetParent,
+    Map<String, Map<String, dynamic>> metadata, {
+    required bool mergeByTitle,
+  }) {
+    final target = mergeByTitle
+        ? _findOrCreateDirectSubCategory(targetParent, source.title, metadata)
+        : source;
+    if (!mergeByTitle) {
+      source.parent = targetParent;
+      targetParent.subCategories.add(source);
+      return;
+    }
+
+    for (final book in source.books) {
+      target.books.add(_createBookWithCategory(book, target, metadata));
+    }
+
+    for (final child in source.subCategories) {
+      _mergeCategoryIntoParent(
+        child,
+        target,
+        metadata,
+        mergeByTitle: true,
+      );
+    }
   }
 
   /// Extracts the category path from a book's topics or uses the default category name.

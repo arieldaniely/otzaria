@@ -8,7 +8,8 @@ import 'package:otzaria/library/bloc/library_bloc.dart';
 import 'package:otzaria/library/bloc/library_event.dart';
 import 'package:otzaria/migration/models/category.dart';
 import 'package:otzaria/migration/sync/background_db_sync_worker.dart';
-import 'package:otzaria/migration/sync/file_sync_service.dart' show FileSyncResult;
+import 'package:otzaria/migration/sync/file_sync_service.dart'
+    show FileSyncResult;
 import 'package:otzaria/settings/engine/settings_repository.dart';
 import 'package:otzaria/settings/services/custom_folders/custom_folder.dart';
 
@@ -45,6 +46,7 @@ class CustomFoldersBloc extends Bloc<CustomFoldersEvent, CustomFoldersState> {
     on<AddCustomFolder>(_onAdd);
     on<RemoveCustomFolder>(_onRemove);
     on<ToggleAddToDatabase>(_onToggleAddToDatabase);
+    on<UpdateCustomFolderDisplayMode>(_onUpdateDisplayMode);
     on<RescanCustomFolders>(_onRescan);
   }
 
@@ -76,9 +78,7 @@ class CustomFoldersBloc extends Bloc<CustomFoldersEvent, CustomFoldersState> {
         _libraryBloc.add(RefreshLibrary());
         if (result.hasPartialFailure) {
           final failedMsg = result.failedDetails.isNotEmpty
-              ? result.failedDetails
-                  .map((d) => '"${d.$1}": ${d.$2}')
-                  .join('\n')
+              ? result.failedDetails.map((d) => '"${d.$1}": ${d.$2}').join('\n')
               : 'כשל: ${result.failedBooks}';
           emit(state.copyWith(
             isSyncing: false,
@@ -165,6 +165,25 @@ class CustomFoldersBloc extends Bloc<CustomFoldersEvent, CustomFoldersState> {
     } catch (e) {
       emit(state.copyWith(isSyncing: false, error: 'שגיאה בסנכרון: $e'));
     }
+  }
+
+  Future<void> _onUpdateDisplayMode(
+    UpdateCustomFolderDisplayMode event,
+    Emitter<CustomFoldersState> emit,
+  ) async {
+    final currentFolders = _loadFolders();
+    final newFolders = CustomFoldersManager.updateFolderDisplayMode(
+      currentFolders,
+      event.folder.path,
+      event.displayMode,
+    );
+    await _saveFolders(newFolders);
+    emit(state.copyWith(
+      folders: newFolders,
+      message: null,
+      error: null,
+    ));
+    _libraryBloc.add(RefreshLibrary());
   }
 
   Future<void> _onRescan(

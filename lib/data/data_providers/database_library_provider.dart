@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/foundation.dart'
     show ValueNotifier, debugPrint, visibleForTesting;
+import 'package:flutter_settings_screens/flutter_settings_screens.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:otzaria/data/constants/database_constants.dart';
 import 'package:otzaria/data/data_providers/book_database_resolver.dart';
@@ -23,6 +24,8 @@ import 'package:otzaria/migration/models/toc_entry.dart' as db_models;
 import 'package:otzaria/utils/file/file_hidden_utils.dart';
 import 'package:otzaria/migration/models/alt_toc_structure.dart';
 import 'package:otzaria/migration/models/alt_toc_entry.dart';
+import 'package:otzaria/settings/engine/settings_repository.dart';
+import 'package:otzaria/settings/services/custom_folders/custom_folder.dart';
 import 'package:otzaria/utils/text/text_manipulation.dart';
 import 'package:otzaria/utils/file/toc_parser.dart';
 import 'package:otzaria/utils/file/docx_to_otzaria.dart';
@@ -1777,6 +1780,13 @@ class DatabaseLibraryProvider implements LibraryProvider {
         return created;
       }();
 
+      final customFolders = CustomFoldersManager.loadFolders(
+        Settings.getValue<String>(SettingsRepository.keyCustomFolders),
+      );
+      final customFoldersByName = {
+        for (final folder in customFolders) folder.name: folder,
+      };
+
       // ID טבעי (לא offset) של "ספרים אישיים" מ-user_books.db.
       final personalRootId = personalRootInUserDb.id;
       _userBooksCategoryIds.add(personalRootId);
@@ -1814,7 +1824,51 @@ class DatabaseLibraryProvider implements LibraryProvider {
         ...?categoriesByParent[personalRootInUserDb.id],
       ]..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
       for (final child in children) {
-        final existing = personalCategoryInLibrary.subCategories
+        final displayMode = customFoldersByName[child.title]?.displayMode ??
+            CustomFolderDisplayMode.personalCategory;
+        if (displayMode == CustomFolderDisplayMode.libraryRoot) {
+          final existingRoot = library.subCategories
+              .where((category) => category.title == child.title)
+              .firstOrNull;
+          if (existingRoot == null) {
+            final builtSubCategory = _buildUserBooksCatalogCategoryRecursive(
+              child,
+              booksByCategory,
+              categoriesByParent,
+              userAuthors,
+              library,
+              metadata,
+            );
+            library.subCategories.add(builtSubCategory);
+          } else {
+            existingRoot.parent = library;
+            _appendUserBooksContentToCategoryRecursive(
+              existingRoot,
+              child,
+              booksByCategory,
+              categoriesByParent,
+              userAuthors,
+              metadata,
+            );
+          }
+          continue;
+        }
+
+        if (displayMode == CustomFolderDisplayMode.separate) {
+          final builtSubCategory = _buildUserBooksCatalogCategoryRecursive(
+            child,
+            booksByCategory,
+            categoriesByParent,
+            userAuthors,
+            library,
+            metadata,
+          );
+          library.subCategories.add(builtSubCategory);
+          continue;
+        }
+
+        final targetParent = personalCategoryInLibrary;
+        final existing = targetParent.subCategories
             .where((c) => c.title == child.title)
             .firstOrNull;
         if (existing == null) {
@@ -1823,12 +1877,12 @@ class DatabaseLibraryProvider implements LibraryProvider {
             booksByCategory,
             categoriesByParent,
             userAuthors,
-            personalCategoryInLibrary,
+            targetParent,
             metadata,
           );
-          personalCategoryInLibrary.subCategories.add(builtSubCategory);
+          targetParent.subCategories.add(builtSubCategory);
         } else {
-          existing.parent = personalCategoryInLibrary;
+          existing.parent = targetParent;
           _appendUserBooksContentToCategoryRecursive(
             existing,
             child,
@@ -2425,7 +2479,8 @@ class DatabaseLibraryProvider implements LibraryProvider {
       // Phase 1, so no TOC parse or DB read happens here for them.
       for (final book in discovered) {
         if (book.conversionError != null) {
-          debugPrint('⚠️ DOCX conversion failed for ${book.title}: ${book.conversionError}');
+          debugPrint(
+              '⚠️ DOCX conversion failed for ${book.title}: ${book.conversionError}');
           failedDetails.add((book.title, book.conversionError!));
           failed++;
           continue;

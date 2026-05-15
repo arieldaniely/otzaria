@@ -1,5 +1,24 @@
 import 'dart:convert';
 
+enum CustomFolderDisplayMode {
+  separate,
+  personalCategory,
+  libraryRoot,
+}
+
+extension CustomFolderDisplayModeLabels on CustomFolderDisplayMode {
+  String get label {
+    switch (this) {
+      case CustomFolderDisplayMode.separate:
+        return 'הצג בנפרד';
+      case CustomFolderDisplayMode.personalCategory:
+        return 'ספרים אישיים';
+      case CustomFolderDisplayMode.libraryRoot:
+        return 'מזג לשורש';
+    }
+  }
+}
+
 /// מודל לתיקייה מותאמת אישית שהמשתמש הוסיף
 class CustomFolder {
   /// נתיב התיקייה במערכת הקבצים
@@ -8,12 +27,15 @@ class CustomFolder {
   /// האם להכניס את תוכן התיקייה ל-DB
   final bool addToDatabase;
 
+  final CustomFolderDisplayMode displayMode;
+
   /// תאריך הוספה
   final DateTime addedAt;
 
   const CustomFolder({
     required this.path,
     this.addToDatabase = false,
+    this.displayMode = CustomFolderDisplayMode.personalCategory,
     required this.addedAt,
   });
 
@@ -23,11 +45,13 @@ class CustomFolder {
   CustomFolder copyWith({
     String? path,
     bool? addToDatabase,
+    CustomFolderDisplayMode? displayMode,
     DateTime? addedAt,
   }) {
     return CustomFolder(
       path: path ?? this.path,
       addToDatabase: addToDatabase ?? this.addToDatabase,
+      displayMode: displayMode ?? this.displayMode,
       addedAt: addedAt ?? this.addedAt,
     );
   }
@@ -36,14 +60,20 @@ class CustomFolder {
     return {
       'path': path,
       'addToDatabase': addToDatabase,
+      'displayMode': displayMode.name,
       'addedAt': addedAt.toIso8601String(),
     };
   }
 
   factory CustomFolder.fromJson(Map<String, dynamic> json) {
+    final displayModeName = json['displayMode'] as String?;
     return CustomFolder(
       path: json['path'] as String,
       addToDatabase: json['addToDatabase'] as bool? ?? false,
+      displayMode: CustomFolderDisplayMode.values.firstWhere(
+        (mode) => mode.name == displayModeName,
+        orElse: () => CustomFolderDisplayMode.personalCategory,
+      ),
       addedAt: DateTime.parse(json['addedAt'] as String),
     );
   }
@@ -51,11 +81,15 @@ class CustomFolder {
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    return other is CustomFolder && other.path == path;
+    return other is CustomFolder &&
+        other.path == path &&
+        other.addToDatabase == addToDatabase &&
+        other.displayMode == displayMode &&
+        other.addedAt == addedAt;
   }
 
   @override
-  int get hashCode => path.hashCode;
+  int get hashCode => Object.hash(path, addToDatabase, displayMode, addedAt);
 }
 
 /// מנהל תיקיות מותאמות אישית
@@ -108,6 +142,19 @@ class CustomFoldersManager {
     return folders.map((f) {
       if (f.path == path) {
         return f.copyWith(addToDatabase: addToDatabase);
+      }
+      return f;
+    }).toList();
+  }
+
+  static List<CustomFolder> updateFolderDisplayMode(
+    List<CustomFolder> folders,
+    String path,
+    CustomFolderDisplayMode displayMode,
+  ) {
+    return folders.map((f) {
+      if (f.path == path) {
+        return f.copyWith(displayMode: displayMode);
       }
       return f;
     }).toList();

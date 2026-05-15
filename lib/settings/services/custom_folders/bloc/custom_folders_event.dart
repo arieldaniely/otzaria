@@ -33,6 +33,14 @@ class ToggleAddToDatabase extends CustomFoldersEvent {
   List<Object> get props => [folder, value];
 }
 
+class UpdateCustomFolderDisplayMode extends CustomFoldersEvent {
+  const UpdateCustomFolderDisplayMode(this.folder, this.displayMode);
+  final CustomFolder folder;
+  final CustomFolderDisplayMode displayMode;
+  @override
+  List<Object> get props => [folder, displayMode];
+}
+
 class RescanCustomFolders extends CustomFoldersEvent {
   const RescanCustomFolders({this.showNoChangesMessage = true});
   final bool showNoChangesMessage;

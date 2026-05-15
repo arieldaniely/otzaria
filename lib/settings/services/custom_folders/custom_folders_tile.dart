@@ -134,6 +134,15 @@ class _CustomFoldersTileState extends State<CustomFoldersTile> {
     bloc.add(ToggleAddToDatabase(folder, value));
   }
 
+  void _updateDisplayMode(
+    CustomFolder folder,
+    CustomFolderDisplayMode displayMode,
+  ) {
+    context
+        .read<CustomFoldersBloc>()
+        .add(UpdateCustomFolderDisplayMode(folder, displayMode));
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<CustomFoldersBloc, CustomFoldersState>(
@@ -169,8 +178,7 @@ class _CustomFoldersTileState extends State<CustomFoldersTile> {
                           ? const SizedBox(
                               width: 18,
                               height: 18,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(FluentIcons.arrow_clockwise_24_regular),
                       onPressed: isSyncing
@@ -242,11 +250,9 @@ class _CustomFoldersTileState extends State<CustomFoldersTile> {
             ),
             if (_isExpanded && folders.isNotEmpty)
               Container(
-                margin:
-                    const EdgeInsets.only(right: 16, left: 16, bottom: 8),
+                margin: const EdgeInsets.only(right: 16, left: 16, bottom: 8),
                 decoration: BoxDecoration(
-                  color:
-                      Theme.of(context).colorScheme.surfaceContainerHighest,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -297,14 +303,80 @@ class _CustomFoldersTileState extends State<CustomFoldersTile> {
                         : (value) => _toggleAddToDatabase(folder, value),
                   ),
           ),
+          _FolderDisplayModeMenu(
+            displayMode: folder.displayMode,
+            enabled: !isSyncing,
+            onChanged: (value) => _updateDisplayMode(folder, value),
+          ),
           IconButton(
             icon: const Icon(FluentIcons.delete_24_regular, size: 18),
-            onPressed:
-                isSyncing ? null : () => _removeFolder(folder),
+            onPressed: isSyncing ? null : () => _removeFolder(folder),
             tooltip: 'הסר תיקייה',
           ),
         ],
       ),
     );
+  }
+}
+
+class _FolderDisplayModeMenu extends StatelessWidget {
+  const _FolderDisplayModeMenu({
+    required this.displayMode,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final CustomFolderDisplayMode displayMode;
+  final bool enabled;
+  final ValueChanged<CustomFolderDisplayMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<CustomFolderDisplayMode>(
+      enabled: enabled,
+      tooltip: 'אופן הצגת התיקייה',
+      initialValue: displayMode,
+      icon: Icon(
+        _iconFor(displayMode),
+        size: 18,
+      ),
+      onSelected: onChanged,
+      itemBuilder: (context) {
+        return CustomFolderDisplayMode.values.map((mode) {
+          return PopupMenuItem<CustomFolderDisplayMode>(
+            value: mode,
+            child: Row(
+              children: [
+                Icon(_iconFor(mode), size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    mode.label,
+                    textDirection: TextDirection.rtl,
+                  ),
+                ),
+                if (mode == displayMode)
+                  Icon(
+                    FluentIcons.checkmark_20_regular,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+              ],
+            ),
+          );
+        }).toList();
+      },
+    );
+  }
+
+  IconData _iconFor(CustomFolderDisplayMode mode) {
+    switch (mode) {
+      case CustomFolderDisplayMode.separate:
+        return FluentIcons.panel_separate_window_20_regular;
+      case CustomFolderDisplayMode.personalCategory:
+        return FluentIcons.book_24_regular;
+      case CustomFolderDisplayMode.libraryRoot:
+        return FluentIcons.branch_fork_20_regular;
+    }
   }
 }

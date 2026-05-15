@@ -88,6 +88,64 @@ void main() {
       await bloc.close();
       await libraryBloc.close();
     });
+    test('CustomFolder displayMode נשמר ותומך בהגדרות ישנות', () {
+      final legacyFolder = CustomFoldersManager.loadFolders(
+        '[{"path":"C:/legacy","addToDatabase":true,"addedAt":"2026-05-07T00:00:00.000"}]',
+      ).single;
+
+      expect(
+        legacyFolder.displayMode,
+        CustomFolderDisplayMode.personalCategory,
+      );
+
+      final separateFolder = legacyFolder.copyWith(
+        displayMode: CustomFolderDisplayMode.separate,
+      );
+      final restored = CustomFoldersManager.loadFolders(
+        CustomFoldersManager.saveFolders([separateFolder]),
+      ).single;
+
+      expect(restored.displayMode, CustomFolderDisplayMode.separate);
+    });
+
+    test('UpdateCustomFolderDisplayMode שומר הגדרה ומרענן ספרייה', () async {
+      final folder = _folder('C:/folder-to-display');
+      await _saveFolders([folder]);
+
+      final libraryBloc = _RecordingLibraryBloc();
+      final bloc = CustomFoldersBloc(
+        libraryBloc: libraryBloc,
+      )..add(const LoadCustomFolders());
+
+      await bloc.stream.firstWhere((state) => state.folders.isNotEmpty);
+
+      bloc.add(
+        UpdateCustomFolderDisplayMode(
+          folder,
+          CustomFolderDisplayMode.libraryRoot,
+        ),
+      );
+
+      await bloc.stream.firstWhere(
+        (state) =>
+            state.folders.single.displayMode ==
+            CustomFolderDisplayMode.libraryRoot,
+      );
+
+      expect(
+        CustomFoldersManager.loadFolders(
+          Settings.getValue<String>(SettingsRepository.keyCustomFolders),
+        ).single.displayMode,
+        CustomFolderDisplayMode.libraryRoot,
+      );
+      expect(
+        libraryBloc.recordedEvents.whereType<RefreshLibrary>(),
+        hasLength(1),
+      );
+
+      await bloc.close();
+      await libraryBloc.close();
+    });
   });
 }
 

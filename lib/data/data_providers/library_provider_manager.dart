@@ -567,6 +567,12 @@ class LibraryProviderManager {
       if (provider.isInitialized) {
         debugPrint('📚 Building catalog from ${provider.displayName}');
         final library = await provider.buildLibraryCatalog(metadata, rootPath);
+        if (provider == databaseProvider && fileSystemProvider.isInitialized) {
+          await fileSystemProvider.appendCustomFoldersToLibrary(
+            library,
+            metadata,
+          );
+        }
 
         // Update book to provider mapping
         await _updateBookToProviderMapping(library);
