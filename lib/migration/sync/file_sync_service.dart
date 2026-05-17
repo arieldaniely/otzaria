@@ -10,6 +10,7 @@ import '../database/repository/seforim_repository.dart';
 import '../../settings/services/custom_folders/custom_folder.dart';
 import '../../settings/engine/settings_repository.dart';
 import '../generator/generator.dart';
+import '../generator/imported_link_processor.dart';
 import '../generator/link_processor.dart';
 import '../models/category.dart';
 import '../../utils/file/file_hidden_utils.dart';
@@ -265,7 +266,6 @@ class FileSyncService {
         : '$normalizedFolderPath${path.separator}';
     return normalizedBookPath.startsWith(folderWithSeparator);
   }
-
 
   Future<bool> _categoryBelongsToAnyConfiguredFolder(
     int categoryId,
@@ -585,6 +585,18 @@ class FileSyncService {
           addedCategories += result.addedCategories;
           skippedFiles += result.skippedFiles;
           errors.addAll(result.errors);
+
+          if (folder.addToDatabase) {
+            final linksResult = await ImportedLinkProcessor(_customFoldersRepo)
+                .processCustomFolderLinks(
+              folderPath: folder.path,
+              onProgress: (progress, message) {
+                _reportProgress(0.55 + (progress * 0.05), message);
+              },
+            );
+            addedLinks += linksResult.processedLinks;
+            errors.addAll(linksResult.errors);
+          }
         }
       }
 

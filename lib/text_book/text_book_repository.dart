@@ -279,8 +279,13 @@ class TextBookRepository {
         .toSet()
         .toList();
 
-    commentatorTitles.sort((a, b) => a.compareTo(b));
-    return commentatorTitles;
+    final importedCommentatorTitles = await DatabaseLibraryProvider.instance
+        .getImportedCommentaryTargetsForBook(book.title);
+    commentatorTitles.addAll(importedCommentatorTitles);
+    final uniqueCommentatorTitles = commentatorTitles.toSet().toList();
+
+    uniqueCommentatorTitles.sort((a, b) => a.compareTo(b));
+    return uniqueCommentatorTitles;
   }
 
   Future<bool> bookExists(String title) async {

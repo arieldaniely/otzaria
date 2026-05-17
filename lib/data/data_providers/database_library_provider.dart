@@ -12,6 +12,7 @@ import 'package:otzaria/data/data_providers/library_provider.dart';
 import 'package:otzaria/data/data_providers/sqlite_data_provider.dart';
 import 'package:otzaria/data/data_providers/user_books_database_holder.dart';
 import 'package:otzaria/migration/database/repository/seforim_repository.dart';
+import 'package:otzaria/migration/generator/imported_link_processor.dart';
 import 'package:otzaria/migration/database/sql/sqlite3_utils.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
@@ -395,6 +396,65 @@ List<Map<String, dynamic>> _loadBookLinksRowsInRangeInIsolate({
   }
 }
 
+List<Map<String, dynamic>> _loadImportedLinksRowsInIsolate({
+  required String dbPath,
+  required String title,
+  int? startLineIndex,
+  int? endLineIndex,
+  required List<String>? targetBookTitles,
+}) {
+  sqlite3.Database? db;
+  try {
+    db = sqlite3.sqlite3.open(dbPath, mode: sqlite3.OpenMode.readOnly);
+    final tableExists = db.select(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'imported_link' LIMIT 1",
+    );
+    if (tableExists.isEmpty) return const [];
+
+    final parameters = <Object?>[title];
+    final rangeClause = startLineIndex != null && endLineIndex != null
+        ? 'AND sourceLineIndex BETWEEN ? AND ?'
+        : '';
+    if (rangeClause.isNotEmpty) {
+      parameters
+        ..add(startLineIndex)
+        ..add(endLineIndex);
+    }
+
+    final hasCommentaryFilter =
+        targetBookTitles != null && targetBookTitles.isNotEmpty;
+    final targetBookPlaceholders = hasCommentaryFilter
+        ? List.filled(targetBookTitles.length, '?').join(', ')
+        : '';
+    if (hasCommentaryFilter) {
+      parameters.addAll(targetBookTitles);
+    }
+
+    final commentaryFilterClause = targetBookTitles == null
+        ? ''
+        : hasCommentaryFilter
+            ? "AND (UPPER(connectionType) NOT IN ('COMMENTARY', 'TARGUM') OR targetTitle IN ($targetBookPlaceholders))"
+            : "AND UPPER(connectionType) NOT IN ('COMMENTARY', 'TARGUM')";
+
+    return db.select('''
+        SELECT
+          sourceLineIndex,
+          targetLineIndex,
+          targetHeRef,
+          targetTitle,
+          targetPath,
+          connectionType
+        FROM imported_link
+        WHERE sourceTitle = ?
+          $rangeClause
+          $commentaryFilterClause
+        ORDER BY sourceLineIndex, targetTitle
+      ''', parameters).toMapList();
+  } finally {
+    db?.close();
+  }
+}
+
 List<Map<String, dynamic>> _loadAlternativeStructuresRowsInIsolate({
   required String dbPath,
   required String bookTitle,
@@ -465,6 +525,7 @@ class PersonalBooksOperationQueue {
 class ScanResult {
   final int addedBooks;
   final int updatedBooks;
+  final int importedLinks;
   final int failedBooks;
   final Object? fatalError;
   final List<(String title, String reason)> failedDetails;
@@ -472,6 +533,7 @@ class ScanResult {
   const ScanResult({
     this.addedBooks = 0,
     this.updatedBooks = 0,
+    this.importedLinks = 0,
     this.failedBooks = 0,
     this.fatalError,
     this.failedDetails = const [],
@@ -479,7 +541,8 @@ class ScanResult {
 
   bool get isSuccess => fatalError == null;
   bool get hasPartialFailure => fatalError == null && failedBooks > 0;
-  bool get hasChanges => addedBooks > 0 || updatedBooks > 0;
+  bool get hasChanges =>
+      addedBooks > 0 || updatedBooks > 0 || importedLinks > 0;
 }
 
 /// Library provider that loads books from the SQLite database.
@@ -2146,11 +2209,102 @@ class DatabaseLibraryProvider implements LibraryProvider {
             .fold(0, (sum, sub) => sum + _countCategories(sub));
   }
 
+  Future<List<Link>> _getImportedLinksForBook(
+    String title, {
+    int? startLineIndex,
+    int? endLineIndex,
+    List<String>? targetBookTitles,
+  }) async {
+    try {
+      final dbPath = await UserBooksDatabaseHolder.resolveDbPath();
+      if (!await File(dbPath).exists()) return const [];
+
+      final rows = await Isolate.run(
+        () => _loadImportedLinksRowsInIsolate(
+          dbPath: dbPath,
+          title: title,
+          startLineIndex: startLineIndex,
+          endLineIndex: endLineIndex,
+          targetBookTitles: targetBookTitles,
+        ),
+      );
+
+      return rows.map(_importedLinkFromRow).toList();
+    } catch (e) {
+      debugPrint('⚠️ Error loading imported links for "$title": $e');
+      return const [];
+    }
+  }
+
+  Link _importedLinkFromRow(Map<String, dynamic> row) {
+    final targetTitle = row['targetTitle'] as String;
+    final targetPath = row['targetPath'] as String? ?? '';
+    final targetHeRef = row['targetHeRef'] as String? ?? '';
+    final connectionType = row['connectionType'] as String? ?? 'reference';
+
+    return Link(
+      heRef: targetHeRef.trim().isNotEmpty ? targetHeRef.trim() : targetTitle,
+      index1: row['sourceLineIndex'] as int,
+      path2: targetPath.trim().isNotEmpty ? targetPath : targetTitle,
+      index2: row['targetLineIndex'] as int,
+      connectionType: connectionType,
+      targetFileType: _fileTypeFromPath(targetPath),
+    );
+  }
+
+  String? _fileTypeFromPath(String pathValue) {
+    final normalized = pathValue.replaceAll('\\', '/');
+    final lastDot = normalized.lastIndexOf('.');
+    final lastSlash = normalized.lastIndexOf('/');
+    if (lastDot > lastSlash && lastDot != -1) {
+      return normalized.substring(lastDot + 1).toLowerCase();
+    }
+    return null;
+  }
+
+  List<Link> _mergeLinks(List<Link> databaseLinks, List<Link> importedLinks) {
+    if (databaseLinks.isEmpty) return importedLinks;
+    if (importedLinks.isEmpty) return databaseLinks;
+
+    final merged = <Link>[];
+    final seen = <String>{};
+    for (final link in [...databaseLinks, ...importedLinks]) {
+      final key = [
+        link.index1,
+        link.path2,
+        link.index2,
+        link.heRef,
+        link.connectionType,
+      ].join('\u0001');
+      if (seen.add(key)) {
+        merged.add(link);
+      }
+    }
+    return merged;
+  }
+
+  /// מחזיר שמות ספרי יעד מקישורים אישיים מסוג פרשנות עבור ספר מקור.
+  Future<List<String>> getImportedCommentaryTargetsForBook(String title) async {
+    final links = await _getImportedLinksForBook(title);
+    final targets = links
+        .where((link) {
+          final type = link.connectionType.toUpperCase();
+          return type == 'COMMENTARY' || type == 'TARGUM';
+        })
+        .map((link) => getTitleFromPath(link.path2))
+        .where((targetTitle) => targetTitle.trim().isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    return targets;
+  }
+
   @override
   Future<List<Link>> getAllLinksForBook(
       String title, int categoryId, String fileType) async {
+    final importedLinks = await _getImportedLinksForBook(title);
     if (!_sqliteProvider.isInitialized || _sqliteProvider.repository == null) {
-      return [];
+      return importedLinks;
     }
 
     try {
@@ -2182,11 +2336,12 @@ class DatabaseLibraryProvider implements LibraryProvider {
         );
       }).toList();
 
-      debugPrint('💾 Found ${links.length} links for book "$title"');
-      return links;
+      final mergedLinks = _mergeLinks(links, importedLinks);
+      debugPrint('💾 Found ${mergedLinks.length} links for book "$title"');
+      return mergedLinks;
     } catch (e) {
       debugPrint('⚠️ Error in getAllLinksForBook "$title": $e');
-      return [];
+      return importedLinks;
     }
   }
 
@@ -2204,8 +2359,14 @@ class DatabaseLibraryProvider implements LibraryProvider {
         .toSet()
         .toList()
       ?..sort();
+    final importedLinks = await _getImportedLinksForBook(
+      title,
+      startLineIndex: startLineIndex + 1,
+      endLineIndex: endLineIndex + 1,
+      targetBookTitles: normalizedTargetBookTitles,
+    );
     if (!_sqliteProvider.isInitialized || _sqliteProvider.repository == null) {
-      return [];
+      return importedLinks;
     }
 
     try {
@@ -2239,10 +2400,10 @@ class DatabaseLibraryProvider implements LibraryProvider {
           targetFileType: row['targetFileType'] as String?,
         );
       }).toList();
-      return links;
+      return _mergeLinks(links, importedLinks);
     } catch (e) {
       debugPrint('⚠️ Error in getLinksForBookRange "$title": $e');
-      return [];
+      return importedLinks;
     }
   }
 
@@ -2451,6 +2612,7 @@ class DatabaseLibraryProvider implements LibraryProvider {
 
     int added = 0;
     int updated = 0;
+    int importedLinks = 0;
     int failed = 0;
     final failedDetails = <(String, String)>[];
 
@@ -2546,9 +2708,21 @@ class DatabaseLibraryProvider implements LibraryProvider {
 
       debugPrint('📁 Finished scanning custom folder: $folderPath '
           '(added=$added, updated=$updated, failed=$failed)');
+      if (repository is SeforimRepository) {
+        final linksResult = await ImportedLinkProcessor(repository)
+            .processCustomFolderLinks(folderPath: folderPath);
+        importedLinks = linksResult.processedLinks;
+        if (linksResult.errors.isNotEmpty) {
+          for (final error in linksResult.errors) {
+            failedDetails.add(('קישורים', error));
+          }
+        }
+      }
+
       return ScanResult(
           addedBooks: added,
           updatedBooks: updated,
+          importedLinks: importedLinks,
           failedBooks: failed,
           failedDetails: failedDetails);
     } catch (e) {

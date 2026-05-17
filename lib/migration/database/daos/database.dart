@@ -151,7 +151,6 @@ class MyDatabase {
       db.execute('PRAGMA journal_mode=WAL');
     } catch (_) {}
 
-
     // Ensure schema exists (all scripts use CREATE TABLE/INDEX IF NOT EXISTS).
     for (final script in _getCreateScripts()) {
       db.execute(script);
@@ -475,6 +474,39 @@ class MyDatabase {
       ''',
       'CREATE INDEX IF NOT EXISTS idx_book_has_source_links ON book_has_links(hasSourceLinks);',
       'CREATE INDEX IF NOT EXISTS idx_book_has_target_links ON book_has_links(hasTargetLinks);',
+
+      // Imported personal links.
+      //
+      // These links intentionally do not use foreign keys to book/line, because
+      // a custom-folder link may connect a user book in user_books.db to an
+      // official book in seforim.db.
+      '''
+      CREATE TABLE IF NOT EXISTS imported_link (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sourceTitle TEXT NOT NULL,
+          sourceLineIndex INTEGER NOT NULL,
+          targetTitle TEXT NOT NULL,
+          targetPath TEXT NOT NULL DEFAULT '',
+          targetLineIndex INTEGER NOT NULL,
+          targetHeRef TEXT NOT NULL DEFAULT '',
+          connectionType TEXT NOT NULL DEFAULT 'reference',
+          linkFilePath TEXT NOT NULL,
+          sourceFolderPath TEXT,
+          importedAt INTEGER NOT NULL,
+          UNIQUE (
+            sourceTitle,
+            sourceLineIndex,
+            targetTitle,
+            targetLineIndex,
+            connectionType,
+            linkFilePath
+          )
+      );
+      ''',
+      'CREATE INDEX IF NOT EXISTS idx_imported_link_source ON imported_link(sourceTitle, sourceLineIndex);',
+      'CREATE INDEX IF NOT EXISTS idx_imported_link_target ON imported_link(targetTitle, targetLineIndex);',
+      'CREATE INDEX IF NOT EXISTS idx_imported_link_file ON imported_link(linkFilePath);',
+      'CREATE INDEX IF NOT EXISTS idx_imported_link_folder ON imported_link(sourceFolderPath);',
 
       // Line to TOC mapping table
       '''
