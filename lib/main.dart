@@ -90,7 +90,7 @@ import 'package:otzaria/plugins/view/webview_environment_holder.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
 // Updated automatically by version update scripts - do not edit manually
-const int _latestReleasedBuildNumber = 90950;
+const int _latestReleasedBuildNumber = 90960;
 
 // Global reference to window listener for cleanup
 AppWindowListener? _appWindowListener;
